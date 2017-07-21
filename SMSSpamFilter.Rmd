@@ -1,0 +1,243 @@
+---
+title: "SMS Spam Filter"
+output: html_notebook
+fig_width: 7
+highlight: tango
+number_sections: yes
+theme: readable
+fig_height: 4.5
+toc: yes
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+# Introduction
+
+In this project I will build a SMS Spam filter using Naive Bayes algorithm. The data set has been adapted from the SMS Spam collection: http://www.dt.fee.unicamp.br/~tiago/smsspamcollection/.
+I will be using the tm package in r to do the analysis.
+
+The raw data will be transformed into  a representation known as **bag-of-words**: this representation ignores word order and simply provides a variable indicating whether the word appears at all. Such representation is particularly useful for spam filter where we are using the frequency of occurrence of particular words to predict whether a message is spam or ham. 
+
+The following basic NLP steps would be followed:
+
+* create Corpus
+* standardize text
+* Tokenize text
+* Create Document Term Matrix
+* Visualize Data
+* Prediction!
+
+## load the required libraries
+```{r message=FALSE}
+library(tm)
+library(SnowballC)
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+```{r chunk 10}
+
+# Import the csv file
+sms_raw <- read.csv("sms_spam.csv",stringsAsFactors = FALSE)
+
+# check the data
+str(sms_raw)
+
+# convert the type variable as factor variables
+sms_raw$type <- as.factor(sms_raw$type)
+
+# check how much data has been labeled as ham and spam
+table(sms_raw$type)
+
+```
+
+## Create Corpus
+our first task is to create a corpus of text, this will serve as a repository for our further text processing stages.
+```{r chunk 20}
+
+# Step 1: Create Corpus
+## I will be using the VCorpus() function. VCorpus stands for volatile corpus(volatile as it is stored in memory) as opposed to PCorpus() function that can be used to access permanent corpus stored in data base.
+## Since we have already loaded SMS text into R we will use the VectorSource() reader function to create source object to be supplied to VCorpus()
+sms_corpus <- VCorpus(VectorSource(sms_raw$text))
+
+### Note: by specifying and optional readerControl parameter we can import text from sources like PDF and Word.
+
+# print corpus to see the content summary
+# we can see that it has created 5559 documents out of each of the sms text message
+print(sms_corpus)
+
+# sms_corpus is essentially a complex list, we can use inspect() function to view summary of messages (for example 1st and 2nd message below):
+inspect(sms_corpus[1:2])
+
+# to view actual message text as.character must be applied to the relevant message
+as.character(sms_corpus[[1]])
+
+```
+
+## Standardize text
+The second step is to standardize text this is required so as to clean punctuations and for example to treat upper case and lower case words as same. Example: Hello, hello and Hello!! all three should be treated as hello.
+text Standardization typically includes the following steps:
+
+*  convert to lower case
+*  remove numbers
+*  remove punctuation
+*  remove stop words
+*  word stemming
+*  remove additional whitespaces 
+```{r chunk 30}
+
+# I will use the text map tm_map() function to apply text transformation methods on our corpus.
+
+# Note: if we have to use inbuilt R functions or custom functions inside tm_map() function we need to wrap them inside content_transformer(), for transformation functions provided within the tm package we can use them directly.
+
+# Convert all letters to lowercase, we will use R function tolower
+sms_corpus_clean <- tm_map(sms_corpus,content_transformer(tolower))
+
+# remove all numbers, we will us tm provided function removeNumbers
+sms_corpus_clean <- tm_map(sms_corpus_clean,removeNumbers)
+
+# Note: to view built in transformations in tm package use  getTransformations() function
+getTransformations()
+
+# remove stopwords. We will use stopwords() function in tm package to give us dictionary of stopwords to be removed.
+sms_corpus_clean <- tm_map(sms_corpus_clean,removeWords,stopwords())
+
+# Next step is stemming, we following is an example of stemming using SnoballC library
+wordStem(c('learns','learning','learned'))
+
+## In order to applu wordstem() function to entire corpus, the tm() package includes the stemDocument() transformation
+sms_corpus_clean <- tm_map(sms_corpus_clean, stemDocument)
+
+# The final step is to remove additional whitespaces introduced due to our text cleaning
+sms_corpus_clean <- tm_map(sms_corpus_clean,stripWhitespace)
+
+```
+
+## Tokenization
+After the text data has been cleaned and processed the final step is to split messages into individual components through a process known as **tokenization**. A token is a single element of text string, in this case the tokens are words.
+
+the tm package provides a function called DocumentTermMatrix() which will take in the corpus and create a data strcuture called **Document Term Matrix (DTM)** in which rows indicate the documents (SMS Messages) and columns indicate the terms (words).
+the tm package also provides data structure for a **Term Document Matrix (TDM)**, which is simply a transposed DTM.
+
+**Note**:the type of data struture created with DTM is a **sparse matrix**: the vast majority of the cells of this matrix is filled with zeros. In context of the SMS messages although each message must atleast contain one word, the probability of any one word appearing in a given message is small.
+```{r chunk 40}
+
+# create DTM for sms_corpus_clean corpus
+sms_dtm <- DocumentTermMatrix(sms_corpus_clean)
+
+# Note that if had not preprocessed the text we could laso have added preprocessing in DocumentTermMatrix() by adding control list asshown below.
+sms_dtm_2 <- DocumentTermMatrix(sms_corpus_clean,control = list(tolower=TRUE,removeNumbers=TRUE,stopwords=TRUE,removePunctuation=TRUE,stemming=TRUE))
+
+# if we compare the two datasets above we find that there is slight difference between them. this is because the ordering is slightly different in second option
+
+```
+
+## creating training and test data sets
+```{r chunk 50,message=FALSE}
+
+# load caret package
+library(caret)
+
+# extract index for spliting data set
+train <- createDataPartition(sms_raw$type,p=0.75,list = FALSE)
+
+# for the training and test data set
+sms_dtm_train <- sms_dtm[train,]
+sms_dtm_test <- sms_dtm[-train,]
+
+# extract the training and test labels as well
+sms_train_labels <- sms_raw[train, ]$type
+sms_test_labels  <- sms_raw[-train, ]$type
+
+# check that the proportion of spam is similar
+prop.table(table(sms_train_labels))
+prop.table(table(sms_test_labels))
+
+```
+
+## visualizing text data through word cloud
+In this step we will try to visualize word cloud and see if we can visualize some distinctions between spam and ham message
+
+```{r chunk 60,message=FALSE}
+
+# load word cloud library
+library(wordcloud)
+
+# now we will draw the word cloud for entire cleaned corpus
+## Note the min.freq selects based on minimum frequency for the occurance of the word
+## random.order = FALSE places the most frequent word at centre.
+wordcloud(sms_corpus_clean,min.freq = 50,random.order = FALSE)
+
+# The above figure does not provide us enough information, it would probably be useful to visualize spam and ham data seperately.
+wordcloud(subset(sms_raw,type=='spam')$text,max.words = 40,scale = c(3,0.5))
+wordcloud(subset(sms_raw,type=='ham')$text,max.words = 40,scale = c(3,0.5))
+
+## max.words parameter selects only 40 most commonly occuring words
+## scale allows to set the maximum and minimum font size
+
+```
+
+## Feature reduction and creating indicator features for frequent words.
+
+The sparse mtrix contains ~6500 words, there are lot of words which are not very useful for our training purpose. To reduce the feature we will eliminate any word that appears in less thann 5 sms messages (less than 0.1 percent of records).
+As Naive Bayes uses categorical data for training we will also have to convert the features to categorical variables.
+
+```{r chunk 70}
+
+# use findFreqTerms to find words which occurs in atleast 5 messages
+sms_freq_words <- findFreqTerms(sms_dtm_train,5)
+
+str(sms_freq_words)
+
+# subset training and test set based on frequent words
+sms_dtm_train <- sms_dtm_train[,sms_freq_words]
+sms_dtm_test <- sms_dtm_test[,sms_freq_words]
+
+# function to convert to categorical variables
+convert_counts <- function(x)
+{
+  x <- ifelse(x>0,'Yes','No')
+}
+
+# Apply the above function to the train and test matrix above
+sms_dtm_train <- apply(sms_dtm_train,convert_counts,MARGIN = 2)
+sms_dtm_test <- apply(sms_dtm_test,convert_counts,MARGIN = 2)
+
+```
+
+## Training Naive Bayes Classifier
+```{r chunk 80}
+# we will be using the e1071 package
+library(e1071)
+library(caret)
+
+# train classifier
+sms_classifier <- naiveBayes(sms_dtm_train,sms_train_labels)
+
+# dfsms_train <- data.frame(sms_dtm_train,type=sms_train_labels)
+
+# sms_classifier_caret <- train(dfsms_train$type,data=dfsms_train,method='nb')
+
+# make predictions on test data
+sms_test_pred <- predict(sms_classifier,sms_dtm_test)
+
+confusionMatrix(sms_test_labels,sms_test_pred)
+
+# Improving model performance by adding Laplace estimator
+sms_classifier2 <- naiveBayes(sms_dtm_train,sms_train_labels,laplace = 1)
+
+# make prediction again
+sms_test_pred2 <- predict(sms_classifier2,sms_dtm_test)
+
+confusionMatrix(sms_test_labels,sms_test_pred2)
+confusionMatrix(sms_test_labels,sms_test_pred)
+
+dfsms_train <- data.frame(sms_dtm_train,predictor=sms_train_labels)
+
+sms_classifier_caret <- train(sms_train_labels,method='nb',data=dfsms_train)
+
+```
